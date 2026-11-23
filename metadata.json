@@ -1,0 +1,6 @@
+{
+  "name": "Athenaeum Library Portal",
+  "description": "University library management portal connected to PostgreSQL for managing student circulation, book inventory, and borrow transactions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
