@@ -59,8 +59,15 @@ export default function App() {
         fetch('/api/borrows'),
       ]);
 
-      if (!studentsRes.ok || !booksRes.ok || !borrowsRes.ok) {
-        throw new Error('Unable to load library records from PostgreSQL.');
+      const failed = [studentsRes, booksRes, borrowsRes].find((r) => !r.ok);
+      if (failed) {
+        if (failed.status === 404) {
+          throw new Error(
+            'API endpoints returned 404. Ensure the app is deployed with the Node server (npm start) rather than static-only hosting.'
+          );
+        }
+        const errBody = (await failed.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errBody.error || 'Unable to load library records from PostgreSQL.');
       }
 
       const [studentsData, booksData, borrowsData] = await Promise.all([

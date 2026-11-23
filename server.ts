@@ -10,10 +10,14 @@ const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function createPgPool(): pg.Pool {
+let pool: pg.Pool | null = null;
+
+function getPool(): pg.Pool {
+  if (pool) return pool;
+
   const rawUrl = process.env.DATABASE_URL;
   if (!rawUrl) {
-    throw new Error('DATABASE_URL environment variable is not set.');
+    throw new Error('DATABASE_URL environment variable is not configured.');
   }
 
   const parsed = new URL(rawUrl);
@@ -22,38 +26,38 @@ function createPgPool(): pg.Pool {
     parsed.hostname.includes('aivencloud.com');
   parsed.searchParams.delete('sslmode');
 
-  return new Pool({
+  pool = new Pool({
     connectionString: parsed.toString(),
     ssl: useSsl ? { rejectUnauthorized: false } : undefined,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
   });
-}
 
-const pool = createPgPool();
+  return pool;
+}
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
   // Health check
   app.get('/api/health', async (_req: Request, res: Response) => {
     try {
-      await pool.query('SELECT 1');
+      await getPool().query('SELECT 1');
       res.json({ ok: true, database: 'connected' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Database connection failed';
-      res.status(500).json({ ok: false, error: message });
+      res.status(503).json({ ok: false, error: message });
     }
   });
 
   // GET all students with active borrow state and borrow counts
   app.get('/api/students', async (_req: Request, res: Response) => {
     try {
-      const result = await pool.query(`
+      const result = await getPool().query(`
         SELECT
           s.usn,
           s.name,
@@ -108,13 +112,13 @@ async function startServer() {
     }
 
     try {
-      const existing = await pool.query('SELECT usn FROM student_new WHERE usn = $1', [usn]);
+      const existing = await getPool().query('SELECT usn FROM student_new WHERE usn = $1', [usn]);
       if (existing.rows.length > 0) {
         res.status(409).json({ error: `Student with USN ${usn} already exists.` });
         return;
       }
 
-      await pool.query(
+      await getPool().query(
         'INSERT INTO student_new (usn, name, department) VALUES ($1, $2, $3)',
         [usn, name, department]
       );
@@ -136,7 +140,7 @@ async function startServer() {
   // GET all books with borrowed/available status and current borrower
   app.get('/api/books', async (_req: Request, res: Response) => {
     try {
-      const result = await pool.query(`
+      const result = await getPool().query(`
         SELECT
           b.book_id,
           b.book_name,
@@ -190,7 +194,7 @@ async function startServer() {
       return;
     }
 
-    const client = await pool.connect();
+    const client = await getPool().connect();
     try {
       await client.query('BEGIN');
 
@@ -239,7 +243,7 @@ async function startServer() {
   // GET all borrow transactions from borrow_list joined with student_new and book_list
   app.get('/api/borrows', async (_req: Request, res: Response) => {
     try {
-      const result = await pool.query(`
+      const result = await getPool().query(`
         SELECT
           br.transaction_id,
           br.usn,
@@ -289,7 +293,7 @@ async function startServer() {
       return;
     }
 
-    const client = await pool.connect();
+    const client = await getPool().connect();
     try {
       await client.query('BEGIN');
 
@@ -369,7 +373,7 @@ async function startServer() {
     const nextStatus = req.body?.return_status === 'Not Returned' ? 'Not Returned' : 'Returned';
 
     try {
-      const result = await pool.query(
+      const result = await getPool().query(
         `UPDATE borrow_list
          SET return_status = $1
          WHERE transaction_id = $2
@@ -389,8 +393,13 @@ async function startServer() {
     }
   });
 
-  // Mount Vite middleware in dev, or serve static dist in production
-  if (process.env.NODE_ENV !== 'production') {
+  // Mount Vite middleware in dev, or serve static dist in production/start/preview
+  const isProductionMode =
+    process.env.NODE_ENV === 'production' ||
+    process.env.npm_lifecycle_event === 'start' ||
+    process.env.npm_lifecycle_event === 'preview';
+
+  if (!isProductionMode) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
